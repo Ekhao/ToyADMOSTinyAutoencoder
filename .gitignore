@@ -3,3 +3,4 @@ saved_tf_models/
 tf_lite_models/
 .DS_Store
 Experiments.txt
+results.csv
