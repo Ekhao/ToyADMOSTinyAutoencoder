@@ -1,3 +1,6 @@
 saved_tf_models/
 .ipynb_checkpoints/
 tf_lite_models/
+.DS_Store
+Experiments.txt
+results.csv
