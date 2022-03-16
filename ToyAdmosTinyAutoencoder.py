@@ -41,9 +41,13 @@ anomalous_files_path = tf.io.gfile.glob(anomalous_path + "*ch1*.wav")
 normal_files_path = tf.convert_to_tensor(normal_files_path[:NUMBER_OF_NORMAL_FILES])
 anomalous_files_path = tf.convert_to_tensor(anomalous_files_path[:NUMBER_OF_ANOMALOUS_FILES])
 
+# Get sample rate:
+audio_file = normal_files_path[0].numpy()
+_, sr = librosa.load(audio_file, sr = SAMPLE_RATE)
+print(f"Using sample rate: {sr}")
 
 def custom_librosa_load(audio_file):
-    audio, _ = librosa.load(audio_file.numpy(), sr = SAMPLE_RATE)
+    audio, _ = librosa.load(audio_file.numpy(), sr = sr)
     return audio
 
 # Load the audio files
@@ -56,7 +60,7 @@ FRAME_SIZE = 2048
 HOP_SIZE = 512
 
 def apply_stft(audio_sample):
-    mel_spectrogram = librosa.feature.melspectrogram(audio_sample.numpy(), sr=SAMPLE_RATE, n_fft=2048, hop_length=512, n_mels=256)
+    mel_spectrogram = librosa.feature.melspectrogram(audio_sample.numpy(), sr=sr, n_fft=2048, hop_length=512, n_mels=256)
     return librosa.power_to_db(mel_spectrogram)
 
 normal_magnitudes = tf.map_fn(fn=apply_stft, elems=normal_audio)
@@ -226,18 +230,17 @@ print_stats(predictions, ground_truths)
 
 # ## Save the model to load it using the tflite converter
 # Can then also be loaded in case the training takes a long time
-
-conv_autoencoder.save("./saved_tf_models/test/")
-
-
-# ## Convert the model to a Tensorflow Lite Micro Model
-
-tf_lite_converter = tf.lite.TFLiteConverter.from_saved_model("./saved_tf_models/test/")
+if LOAD_MODEL == None:
+    conv_autoencoder.save(f"./saved_tf_models/{SAVE_NAME}/")
+    # Convert the model to a Tensorflow Lite Micro Model
+    tf_lite_converter = tf.lite.TFLiteConverter.from_saved_model(f"./saved_tf_models/{SAVE_NAME}/")
+else:
+    tf_lite_converter = tf.lite.TFLiteConverter.from_saved_model(f"./saved_tf_models/{LOAD_MODEL}/")
 
 tf_lite_model = tf_lite_converter.convert()
 tf_lite_model_dir = pathlib.Path("./tf_lite_models/")
 
-tf_lite_model_file = tf_lite_model_dir/"modeltest.tflite"
+tf_lite_model_file = tf_lite_model_dir/f"{SAVE_NAME}.tflite"
 model_size = tf_lite_model_file.write_bytes(tf_lite_model)
 
 # ## Save the results in a csv file
