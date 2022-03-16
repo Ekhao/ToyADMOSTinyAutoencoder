@@ -13,7 +13,7 @@ import csv
 import time
 import argparse
 
-argparser = argparse.ArgumentParser(description="A tiny autoencoder for anomaly detection in the ToyADMOS dataset")
+argparser = argparse.ArgumentParser(description="A tiny convolutional autoencoder for anomaly detection in the ToyADMOS dataset")
 argparser.add_argument("-n","--number_of_normal_files", type=int, help="The number of normal sound files to use", default=1800)
 argparser.add_argument("-a","--number_of_anomalous_files", type=int, help="The number of anomalous sound files to use", default=400)
 argparser.add_argument("-sr","--sample_rate", type=int, help="The sample rate to resample the sound files at. 0 (default) will not resample the sound file.", default=0)
