@@ -4,3 +4,4 @@ tf_lite_models/
 .DS_Store
 Experiments.txt
 results.csv
+Processed-results.txt
