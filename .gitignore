@@ -6,3 +6,4 @@ Experiments.txt
 results.csv
 Processed-results.txt
 /figures
+__pycache__
