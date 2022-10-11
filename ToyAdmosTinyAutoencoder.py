@@ -25,7 +25,7 @@ argparser.add_argument("-n", "--number_of_normal_files", type=int,
 argparser.add_argument("-a", "--number_of_anomalous_files", type=int,
                        help="The number of anomalous sound files to use", default=400)
 argparser.add_argument("-sr", "--sample_rate", type=int,
-                       help="The sample rate to resample the sound files at. 0 (default) will not resample the sound file.", default=0)
+                       help="The sample rate to resample the sound files at. 0 will not resample the sound file.", default=24000)
 argparser.add_argument(
     "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported combinations of data type and bit width are float32, float64, int16 and int32", choices=["float32", "float64", "int16", "int32"], default="float32")
 argparser.add_argument("-l", "--load_model",
@@ -61,7 +61,7 @@ if args.sample_rate == 0:
 def load_sound_without_sample_rate(file):
     audio, sample_rate = sf.read(
         file, dtype=args.data_type)
-    # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats
+    # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats. Since we only use one channel for the sound this is actually not needed.
     audio = audio.T
 
     audio = librosa.to_mono(audio)
