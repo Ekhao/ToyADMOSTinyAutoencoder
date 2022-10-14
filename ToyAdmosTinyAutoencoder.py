@@ -64,14 +64,15 @@ def load_sound_without_sample_rate(file):
     # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats. Since we only use one channel for the sound this is actually not needed.
     audio = audio.T
 
-    audio = librosa.to_mono(audio)
-
     # TODO: This is done as librosa only allows its functions to receive floating point arrays. It is not the prettiest at all.
     if args.data_type in (np.int32, np.int16):
         if not np.array_equal(audio.astype(np.float64).astype(args.data_type), audio):
             raise AssertionError(
                 "Conversion from int to float for Librosa resulted in inaccuracies.")
         audio = audio.astype(np.float64)
+
+    audio = librosa.to_mono(audio)
+
     if args.sample_rate != None:
         audio = librosa.resample(
             y=audio, orig_sr=sample_rate, target_sr=args.sample_rate)
@@ -306,11 +307,11 @@ model_size = tf_lite_model_file.write_bytes(tf_lite_model)
 if not pathlib.Path("results.csv").is_file():
     with open("results.csv", "w", encoding="UTF8") as results_file:
         writer = csv.writer(results_file)
-        writer.writerow(["sample_rate(Hz)", "auc_score",
+        writer.writerow(["sample_rate(Hz)", "bit_width", "auc_score",
                         "tf_lite_model_size(bytes)", "inference_time(seconds)"])
 
 # Then write the results of this run
 with open("results.csv", "a", encoding="UTF8") as results_file:
     writer = csv.writer(results_file)
-    writer.writerow([args.sample_rate, round(roc_auc, 6),
+    writer.writerow([args.sample_rate, args.data_type, round(roc_auc, 6),
                     model_size, round(inference_time, 6)])
