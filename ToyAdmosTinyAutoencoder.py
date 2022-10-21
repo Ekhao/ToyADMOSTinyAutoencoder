@@ -14,6 +14,7 @@ import pathlib
 import csv
 import time
 import argparse
+import re
 from joblib import Parallel, delayed
 
 import configuration
@@ -27,12 +28,14 @@ argparser.add_argument("-a", "--number_of_anomalous_files", type=int,
 argparser.add_argument("-sr", "--sample_rate", type=int,
                        help="The sample rate to resample the sound files at. 0 will not resample the sound file.", default=24000)
 argparser.add_argument(
-    "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported combinations of data type and bit width are float32, float64, int16 and int32", choices=["float32", "float64", "int16", "int32"], default="float32")
+    "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported data types are float32, float64, int16 and int32", choices=["float32", "float64", "int32", "int16", "int14", "int12", "int10", "int8"], default="float32")
 argparser.add_argument("-l", "--load_model",
                        help="Load a saved model to run inference on")
 argparser.add_argument("-s", "--save_name",
                        help="Save name for the tflite model", default="test")
 args = argparser.parse_args()
+
+number_of_right_switches = 0
 
 if args.data_type == "float32":
     args.data_type = np.float32
@@ -42,6 +45,15 @@ elif args.data_type == "int16":
     args.data_type = np.int16
 elif args.data_type == "int32":
     args.data_type = np.int32
+else:
+    # As some of our later libraries do not support loading sound as lower than 16 bit integers
+    # we have to implement these lower bit integers ourselves. For that we load data as a 16 bit integer
+    # and right shift the data to match the precision that would be available to a lower bit width integer.
+    bitwidth = int(re.search(r"\d+", args.data_type).group())
+    number_of_right_switches = 16 - bitwidth
+    args.data_type = np.int16
+
+print(number_of_right_switches)
 
 # Get the file paths for the sound files in the training and test path
 normal_files_path = tf.io.gfile.glob(
@@ -64,7 +76,10 @@ def load_sound_without_sample_rate(file):
     # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats. Since we only use one channel for the sound this is actually not needed.
     audio = audio.T
 
-    # TODO: This is done as librosa only allows its functions to receive floating point arrays. It is not the prettiest at all.
+    if number_of_right_switches != 0:
+        audio = audio >> number_of_right_switches
+
+        # This is done as librosa only allows its functions to receive floating point arrays. It is not super pretty.
     if args.data_type in (np.int32, np.int16):
         if not np.array_equal(audio.astype(np.float64).astype(args.data_type), audio):
             raise AssertionError(
