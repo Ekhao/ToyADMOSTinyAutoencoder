@@ -28,7 +28,7 @@ argparser.add_argument("-a", "--number_of_anomalous_files", type=int,
 argparser.add_argument("-sr", "--sample_rate", type=int,
                        help="The sample rate to resample the sound files at. 0 will not resample the sound file.", default=24000)
 argparser.add_argument(
-    "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported data types are float32, float64, int16 and int32", choices=["float32", "float64", "int32", "int16", "int14", "int12", "int10", "int8"], default="float32")
+    "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported data types are float32, float64, int16 and int32", choices=["float32", "float64", "int32", "int16", "int14", "int12", "int10", "int8", "int6", "int4", "int2"], default="float32")
 argparser.add_argument("-l", "--load_model",
                        help="Load a saved model to run inference on")
 argparser.add_argument("-s", "--save_name",
@@ -36,6 +36,7 @@ argparser.add_argument("-s", "--save_name",
 args = argparser.parse_args()
 
 number_of_right_switches = 0
+bitwidth = 0
 
 if args.data_type == "float32":
     args.data_type = np.float32
@@ -285,19 +286,14 @@ def predict(model, data, treshold):
     return tf.math.less(treshold, loss)
 
 
-def print_stats(predictions, labels):
-    print("Accuracy = {}".format(
-        sklearn.metrics.accuracy_score(labels, predictions)))
-    print("Precision = {}".format(
-        sklearn.metrics.precision_score(labels, predictions)))
-    print("Recall = {}".format(sklearn.metrics.recall_score(labels, predictions)))
-
-
 predictions = predict(conv_autoencoder, x_test, threshold)
 
-
-print_stats(predictions, ground_truths)
-
+accuracy = sklearn.metrics.accuracy_score(ground_truths, predictions)
+precision = sklearn.metrics.precision_score(ground_truths, predictions)
+recall = sklearn.metrics.recall_score(ground_truths, predictions)
+print(f"Accuracy = {accuracy}")
+print(f"Precision = {precision}")
+print(f"Recall = {recall}")
 
 # ## Save the model to load it using the tflite converter
 # Can then also be loaded in case the training takes a long time
@@ -322,11 +318,11 @@ model_size = tf_lite_model_file.write_bytes(tf_lite_model)
 if not pathlib.Path("results.csv").is_file():
     with open("results.csv", "w", encoding="UTF8") as results_file:
         writer = csv.writer(results_file)
-        writer.writerow(["sample_rate(Hz)", "bit_width", "auc_score",
+        writer.writerow(["sample_rate(Hz)", "data_type", "bit_width", "auc_score", "precision", "recall",
                         "tf_lite_model_size(bytes)", "inference_time(seconds)"])
 
 # Then write the results of this run
 with open("results.csv", "a", encoding="UTF8") as results_file:
     writer = csv.writer(results_file)
-    writer.writerow([args.sample_rate, args.data_type, round(roc_auc, 6),
+    writer.writerow([args.sample_rate, args.data_type, bitwidth, round(roc_auc, 6), round(precision, 6), round(recall, 6),
                     model_size, round(inference_time, 6)])
