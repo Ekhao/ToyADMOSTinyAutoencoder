@@ -5,6 +5,7 @@
 
 # Start by getting the data into the notebook. We will focus on the first case of toy car example, and use a subset of that dataset to train an autoencoder.
 
+from collections import Counter
 import numpy as np
 import tensorflow as tf
 import librosa
@@ -73,25 +74,22 @@ if args.sample_rate == 0:
 # A function to load the audio files without their sample rate
 def load_sound_without_sample_rate(file):
     audio, sample_rate = sf.read(
-        file, dtype=args.data_type)
+        file, dtype=np.float64)
     # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats. Since we only use one channel for the sound this is actually not needed.
     audio = audio.T
-
-    if number_of_right_switches != 0:
-        audio = audio >> number_of_right_switches
-
-        # This is done as librosa only allows its functions to receive floating point arrays. It is not super pretty.
-    if args.data_type in (np.int32, np.int16):
-        if not np.array_equal(audio.astype(np.float64).astype(args.data_type), audio):
-            raise AssertionError(
-                "Conversion from int to float for Librosa resulted in inaccuracies.")
-        audio = audio.astype(np.float64)
 
     audio = librosa.to_mono(audio)
 
     if args.sample_rate != None:
         audio = librosa.resample(
             y=audio, orig_sr=sample_rate, target_sr=args.sample_rate)
+
+    audio = (audio - min(audio)) / (max(audio) - min(audio))
+
+    audio = audio * 3
+
+    audio = audio.round()
+
     return audio
 
 
@@ -101,6 +99,8 @@ normal_audio = Parallel(
     n_jobs=-1)(delayed(load_sound_without_sample_rate)(file) for file in normal_files_path)
 anomalous_audio = Parallel(
     n_jobs=-1)(delayed(load_sound_without_sample_rate)(file) for file in anomalous_files_path)
+
+print(Counter(normal_audio[0]))
 
 
 def create_mel_spectrogram(audio_sample):
