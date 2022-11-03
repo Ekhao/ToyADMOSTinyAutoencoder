@@ -5,13 +5,16 @@
 
 # Start by getting the data into the notebook. We will focus on the first case of toy car example, and use a subset of that dataset to train an autoencoder.
 
+import numpy as np
 import tensorflow as tf
 import librosa
+import soundfile as sf
 import sklearn.metrics
 import pathlib
 import csv
 import time
 import argparse
+import re
 from joblib import Parallel, delayed
 
 import configuration
@@ -23,21 +26,35 @@ argparser.add_argument("-n", "--number_of_normal_files", type=int,
 argparser.add_argument("-a", "--number_of_anomalous_files", type=int,
                        help="The number of anomalous sound files to use", default=400)
 argparser.add_argument("-sr", "--sample_rate", type=int,
-                       help="The sample rate to resample the sound files at. 0 (default) will not resample the sound file.", default=0)
+                       help="The sample rate to resample the sound files at. 0 will not resample the sound file.", default=24000)
+argparser.add_argument(
+    "-dt", "--data_type", help="The data type to load the audio to be processed as. Supported data types are float32, float64, int16 and int32", choices=["float32", "float64", "int32", "int16", "int14", "int12", "int10", "int8", "int6", "int4", "int2"], default="float32")
 argparser.add_argument("-l", "--load_model",
                        help="Load a saved model to run inference on")
 argparser.add_argument("-s", "--save_name",
                        help="Save name for the tflite model", default="test")
 args = argparser.parse_args()
 
-NUMBER_OF_NORMAL_FILES = args.number_of_normal_files
-NUMBER_OF_ANOMALOUS_FILES = args.number_of_anomalous_files
-if args.sample_rate == 0:
-    SAMPLE_RATE = None
+number_of_right_switches = 0
+bitwidth = 0
+
+if args.data_type == "float32":
+    args.data_type = np.float32
+elif args.data_type == "float64":
+    args.data_type = np.float64
+elif args.data_type == "int16":
+    args.data_type = np.int16
+elif args.data_type == "int32":
+    args.data_type = np.int32
 else:
-    SAMPLE_RATE = args.sample_rate
-SAVE_NAME = args.save_name
-LOAD_MODEL = args.load_model
+    # As some of our later libraries do not support loading sound as lower than 16 bit integers
+    # we have to implement these lower bit integers ourselves. For that we load data as a 16 bit integer
+    # and right shift the data to match the precision that would be available to a lower bit width integer.
+    bitwidth = int(re.search(r"\d+", args.data_type).group())
+    number_of_right_switches = 16 - bitwidth
+    args.data_type = np.int16
+
+print(number_of_right_switches)
 
 # Get the file paths for the sound files in the training and test path
 normal_files_path = tf.io.gfile.glob(
@@ -46,30 +63,49 @@ anomalous_files_path = tf.io.gfile.glob(
     configuration.PATH_TO_ANOMALOUS_FILES + "*ch1*.wav")
 
 # Reduce the amount of files for the experiment to what has been given at the call of the experiment
-normal_files_path = normal_files_path[:NUMBER_OF_NORMAL_FILES]
-anomalous_files_path = anomalous_files_path[:NUMBER_OF_ANOMALOUS_FILES]
+normal_files_path = normal_files_path[:args.number_of_normal_files]
+anomalous_files_path = anomalous_files_path[:args.number_of_anomalous_files]
 
-if SAMPLE_RATE == None:
-    SAMPLE_RATE = librosa.get_samplerate(normal_files_path[0])
+if args.sample_rate == 0:
+    args.sample_rate = librosa.get_samplerate(normal_files_path[0])
 
 
-# A function to use the librosa load function without returning the sample rate
-def librosa_load_without_sample_rate(file, sr):
-    audio, _ = librosa.load(file, sr=sr)
+# A function to load the audio files without their sample rate
+def load_sound_without_sample_rate(file):
+    audio, sample_rate = sf.read(
+        file, dtype=args.data_type)
+    # Librosa uses sound files in a transposed shape of soundfile. As we will use librosa further on we thus transpose the loaded audio. https://librosa.org/doc/main/ioformats.html#ioformats. Since we only use one channel for the sound this is actually not needed.
+    audio = audio.T
+
+    if number_of_right_switches != 0:
+        audio = audio >> number_of_right_switches
+
+        # This is done as librosa only allows its functions to receive floating point arrays. It is not super pretty.
+    if args.data_type in (np.int32, np.int16):
+        if not np.array_equal(audio.astype(np.float64).astype(args.data_type), audio):
+            raise AssertionError(
+                "Conversion from int to float for Librosa resulted in inaccuracies.")
+        audio = audio.astype(np.float64)
+
+    audio = librosa.to_mono(audio)
+
+    if args.sample_rate != None:
+        audio = librosa.resample(
+            y=audio, orig_sr=sample_rate, target_sr=args.sample_rate)
     return audio
 
 
 # Load the audio files in parallel
 print(f"Loading dataset...")
 normal_audio = Parallel(
-    n_jobs=-1)(delayed(librosa_load_without_sample_rate)(file, sr=SAMPLE_RATE) for file in normal_files_path)
+    n_jobs=-1)(delayed(load_sound_without_sample_rate)(file) for file in normal_files_path)
 anomalous_audio = Parallel(
-    n_jobs=-1)(delayed(librosa_load_without_sample_rate)(file, sr=SAMPLE_RATE) for file in anomalous_files_path)
+    n_jobs=-1)(delayed(load_sound_without_sample_rate)(file) for file in anomalous_files_path)
 
 
 def create_mel_spectrogram(audio_sample):
     return librosa.power_to_db(librosa.feature.melspectrogram(
-        y=audio_sample, sr=SAMPLE_RATE, n_fft=configuration.FRAME_SIZE, hop_length=configuration.HOP_SIZE, n_mels=configuration.NUMBER_MEL_FILTER_BANKS))
+        y=audio_sample, sr=args.sample_rate, n_fft=configuration.FRAME_SIZE, hop_length=configuration.HOP_SIZE, n_mels=configuration.NUMBER_MEL_FILTER_BANKS))
 
 
 # Now that we have the audio loaded into memory, we create spectrograms based on the audio.
@@ -118,11 +154,11 @@ def train_model(normal_magnitudes, anomalous_magnitudes):
     shuffled_normal_magnitudes = tf.random.shuffle(normal_magnitudes)
 
     training_magnitudes = shuffled_normal_magnitudes[:int(
-        NUMBER_OF_NORMAL_FILES*0.6)]
+        args.number_of_normal_files*0.6)]
     validation_magnitudes = shuffled_normal_magnitudes[int(
-        NUMBER_OF_NORMAL_FILES*0.6):int(NUMBER_OF_NORMAL_FILES*0.8)]
+        args.number_of_normal_files*0.6):int(args.number_of_normal_files*0.8)]
     test_magnitudes = shuffled_normal_magnitudes[int(
-        NUMBER_OF_NORMAL_FILES*0.8):]
+        args.number_of_normal_files*0.8):]
 
     test_magnitudes = tf.concat(
         [test_magnitudes, anomalous_magnitudes], axis=0)
@@ -179,11 +215,11 @@ def train_model(normal_magnitudes, anomalous_magnitudes):
 
 def load_model(normal_magnitudes, anomalous_magnitudes):
     x_test = tf.concat([normal_magnitudes, anomalous_magnitudes], axis=0)
-    save_path = f"./saved_tf_models/{LOAD_MODEL}/"
+    save_path = f"./saved_tf_models/{args.load_model}/"
     return x_test, tf.keras.models.load_model(save_path)
 
 
-if LOAD_MODEL == None:
+if args.load_model == None:
     x_test, conv_autoencoder = train_model(
         normal_magnitudes, anomalous_magnitudes)
 else:
@@ -196,9 +232,9 @@ else:
 # First we generate a tensor containin the ground truth values of the test set and do predictions on the test set
 
 ground_truths_normal = tf.constant(False, shape=len(
-    x_test)-NUMBER_OF_ANOMALOUS_FILES, dtype=bool)
+    x_test)-args.number_of_anomalous_files, dtype=bool)
 ground_truths_anomaly = tf.constant(
-    True, shape=NUMBER_OF_ANOMALOUS_FILES, dtype=bool)
+    True, shape=args.number_of_anomalous_files, dtype=bool)
 ground_truths = tf.concat(
     [ground_truths_normal, ground_truths_anomaly], axis=0)
 
@@ -250,35 +286,30 @@ def predict(model, data, treshold):
     return tf.math.less(treshold, loss)
 
 
-def print_stats(predictions, labels):
-    print("Accuracy = {}".format(
-        sklearn.metrics.accuracy_score(labels, predictions)))
-    print("Precision = {}".format(
-        sklearn.metrics.precision_score(labels, predictions)))
-    print("Recall = {}".format(sklearn.metrics.recall_score(labels, predictions)))
-
-
 predictions = predict(conv_autoencoder, x_test, threshold)
 
-
-print_stats(predictions, ground_truths)
-
+accuracy = sklearn.metrics.accuracy_score(ground_truths, predictions)
+precision = sklearn.metrics.precision_score(ground_truths, predictions)
+recall = sklearn.metrics.recall_score(ground_truths, predictions)
+print(f"Accuracy = {accuracy}")
+print(f"Precision = {precision}")
+print(f"Recall = {recall}")
 
 # ## Save the model to load it using the tflite converter
 # Can then also be loaded in case the training takes a long time
-if LOAD_MODEL == None:
-    conv_autoencoder.save(f"./saved_tf_models/{SAVE_NAME}/")
+if args.load_model == None:
+    conv_autoencoder.save(f"./saved_tf_models/{args.save_name}/")
     # Convert the model to a Tensorflow Lite Micro Model
     tf_lite_converter = tf.lite.TFLiteConverter.from_saved_model(
-        f"./saved_tf_models/{SAVE_NAME}/")
+        f"./saved_tf_models/{args.save_name}/")
 else:
     tf_lite_converter = tf.lite.TFLiteConverter.from_saved_model(
-        f"./saved_tf_models/{LOAD_MODEL}/")
+        f"./saved_tf_models/{args.load_model}/")
 
 tf_lite_model = tf_lite_converter.convert()
 tf_lite_model_dir = pathlib.Path("./tf_lite_models/")
 
-tf_lite_model_file = tf_lite_model_dir/f"{SAVE_NAME}.tflite"
+tf_lite_model_file = tf_lite_model_dir/f"{args.save_name}.tflite"
 model_size = tf_lite_model_file.write_bytes(tf_lite_model)
 
 # ## Save the results in a csv file
@@ -287,11 +318,11 @@ model_size = tf_lite_model_file.write_bytes(tf_lite_model)
 if not pathlib.Path("results.csv").is_file():
     with open("results.csv", "w", encoding="UTF8") as results_file:
         writer = csv.writer(results_file)
-        writer.writerow(["sample_rate(Hz)", "auc_score",
+        writer.writerow(["sample_rate(Hz)", "data_type", "bit_width", "auc_score", "precision", "recall",
                         "tf_lite_model_size(bytes)", "inference_time(seconds)"])
 
 # Then write the results of this run
 with open("results.csv", "a", encoding="UTF8") as results_file:
     writer = csv.writer(results_file)
-    writer.writerow([SAMPLE_RATE, round(roc_auc, 6),
+    writer.writerow([args.sample_rate, args.data_type, bitwidth, round(roc_auc, 6), round(precision, 6), round(recall, 6),
                     model_size, round(inference_time, 6)])
